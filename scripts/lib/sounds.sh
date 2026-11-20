@@ -60,8 +60,9 @@ ci_globs() {
   printf '%s\n' "$out"
 }
 
-# sound_files <dir>: playable files in a set, one per line. One glob per
-# extension rather than a test per file, so big sets stay fast.
+# sound_files <dir> [first]: playable files in a set, one per line; with
+# "first", stop after one. One glob per extension rather than a test per file,
+# so big sets stay fast.
 sound_files() {
   local globs glob file
   read -r -a globs <<< "$(ci_globs "$(player_exts "$(player_cmd)")")"
@@ -69,19 +70,22 @@ sound_files() {
     # $glob is unquoted on purpose: it is a pattern.
     # shellcheck disable=SC2231
     for file in "$1"/*.$glob; do
-      [ -f "$file" ] && printf '%s\n' "$file"
+      [ -f "$file" ] || continue
+      printf '%s\n' "$file"
+      [ "${2:-}" = first ] && return 0
     done
   done
 }
 
 count_sounds() { sound_files "$1" | grep -c .; }
+has_sounds() { [ -n "$(sound_files "$1" first)" ]; }
 
 # set_path <name>: the directory of a usable set (user first), or exit 1.
 set_path() {
   valid_name "$1" || return 1
   local base
   for base in "$(user_sounds_dir)" "$(bundled_sounds_dir)"; do
-    if [ -d "$base/$1" ] && [ "$(count_sounds "$base/$1")" -gt 0 ]; then
+    if [ -d "$base/$1" ] && has_sounds "$base/$1"; then
       printf '%s\n' "$base/$1"
       return 0
     fi

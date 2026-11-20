@@ -589,6 +589,48 @@ test_hanging_grandchildren_are_killed() {
   return 0
 }
 
+test_script_names_are_not_parsed_by_a_shell() {
+  add_script 'my notify' 'touch "'"$T"'/space.ran"'
+  add_script 'x$(touch pwned)' 'touch "'"$T"'/meta.ran"'
+  local out
+  out="$(cd "$T" && fm hook test)"
+  [ -e "$T/space.ran" ] || fail "script with a space in its name did not run: $out"
+  [ -e "$T/meta.ran" ] || fail "script with \$( in its name did not run: $out"
+  [ -e "$T/pwned" ] && fail "a script name was evaluated by a shell"
+  assert_contains "$out" "my notify: exit 0"
+}
+
+test_config_dir_with_space() {
+  export FEEDME_CONFIG_DIR="$T/Application Support/feedme"
+  add_script notify 'touch "'"$T"'/ran"'
+  arm s1
+  wait_for 4 has_file "$T/ran" || fail "script under a config dir with a space did not run"
+}
+
+test_term_ignoring_script_is_killed() {
+  add_script stubborn 'trap "" TERM; sleep 5; touch "'"$T"'/survived"'
+  local started out
+  started="$(date +%s)"
+  out="$(FEEDME_ACTION_TIMEOUT=1 fm hook test stubborn)"
+  [ $(( $(date +%s) - started )) -le 4 ] || fail "hook test waited for a script that ignores SIGTERM"
+  assert_contains "$out" "stubborn: stopped after 1s"
+  sleep 3
+  [ -e "$T/survived" ] && fail "a script ignoring SIGTERM survived"
+  return 0
+}
+
+test_no_watchdog_left_behind() {
+  add_script quick 'exit 0'
+  local _
+  for _ in 1 2 3 4 5; do
+    fm hook test quick >/dev/null 2>"$T/err"
+    [ -s "$T/err" ] && fail "hook test printed on stderr: $(cat "$T/err")"
+  done
+  sleep 0.3
+  pgrep -f feedme-watchdog >/dev/null && fail "a watchdog outlived its script"
+  return 0
+}
+
 test_webhook_ignores_curlrc() {
   fake_curl
   fm hook add ha https://h.example/x >/dev/null

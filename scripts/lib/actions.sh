@@ -112,20 +112,30 @@ call_webhook() {
   } | curl -q -s -o /dev/null -m 5 -X POST -w '%{http_code}' --data "$body" --config -
 }
 
-# run_with_timeout <seconds> <cmd...>: run the command in its own process group
-# and kill the whole group when it overruns, so neither a stuck script nor
-# anything it started can keep `fire` alive forever.
+# Grace period between SIGTERM and SIGKILL for an overrunning script.
+FEEDME_KILL_GRACE=2
+
+# run_with_timeout <seconds> <cmd...>: run the command in its own process group.
+# When it overruns, the watchdog sends SIGTERM to the whole group, then SIGKILL
+# after FEEDME_KILL_GRACE seconds, so neither a stuck script nor what it
+# started can keep `fire` alive. The KILL targets the group only: a bare pid
+# could already belong to another process by then.
 run_with_timeout() {
   local seconds="$1" pid watchdog status
   shift
   spawn_session "$@"
   pid=$!
   # shellcheck disable=SC2016  # expanded by the watchdog shell, not here
-  spawn_session "${BASH:-bash}" -c 'sleep "$1"; kill -TERM -"$2" 2>/dev/null || kill -TERM "$2"' watchdog "$seconds" "$pid"
+  spawn_session "${BASH:-bash}" -c '
+    sleep "$1"
+    kill -TERM -"$2" 2>/dev/null || kill -TERM "$2" 2>/dev/null || exit 0
+    sleep "$3"
+    kill -KILL -"$2" 2>/dev/null' feedme-watchdog "$seconds" "$pid" "$FEEDME_KILL_GRACE"
   watchdog=$!
   wait "$pid" 2>/dev/null
   status=$?
-  kill -TERM -"$watchdog" 2>/dev/null
+  kill -TERM -"$watchdog" 2>/dev/null || kill -TERM "$watchdog" 2>/dev/null
+  wait "$watchdog" 2>/dev/null
   return "$status"
 }
 
@@ -146,7 +156,7 @@ run_action() {
     *)
       run_with_timeout "$(action_timeout)" "$1"
       status=$?
-      if [ "$status" -eq 143 ]; then
+      if [ "$status" -eq 143 ] || [ "$status" -eq 137 ]; then
         echo "$name: stopped after $(action_timeout)s"
       else
         echo "$name: exit $status"

@@ -206,8 +206,8 @@ chmod +x ~/.config/feedme/hooks.d/notify
 ```
 
 On Linux, use `notify-send "Claude" "Waiting in ${FEEDME_CWD##*/}"` instead.
-A script that runs longer than 10 seconds is stopped, together with every
-process it started. Files that are not executable are ignored, so you can keep
+A script that runs longer than 10 seconds is stopped together with the
+processes it started: first with SIGTERM, then with SIGKILL two seconds later. Files that are not executable are ignored, so you can keep
 notes in the same folder.
 
 ## Alerting on more Claude Code events

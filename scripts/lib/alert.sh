@@ -62,7 +62,8 @@ trace() {
 spawn_session() {
   (
     if command -v perl >/dev/null 2>&1; then
-      exec perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die' "$@"
+      # Block form of exec: never hand a single argument to /bin/sh.
+      exec perl -MPOSIX -e 'POSIX::setsid(); exec { $ARGV[0] } @ARGV or die' "$@"
     elif command -v setsid >/dev/null 2>&1; then
       exec setsid "$@"
     else
