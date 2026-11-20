@@ -127,10 +127,12 @@ cannot decode are ignored:
 | `ffplay`, `mpv` | any | all of the above |
 
 WAV works everywhere. To convert and trim a clip, and match the loudness of the
-bundled sounds:
+bundled sounds, use the import tool that ships with the plugin (it needs
+`ffmpeg`):
 
 ```sh
-tools/import-sound.sh input.mp3 ~/.config/feedme/sounds/mine/clip.wav [start-seconds] [duration-seconds]
+~/.claude/plugins/marketplaces/feedme/tools/import-sound.sh \
+  input.mp3 ~/.config/feedme/sounds/mine/clip.wav [start-seconds] [duration-seconds]
 ```
 
 ### Share a set
@@ -204,8 +206,9 @@ chmod +x ~/.config/feedme/hooks.d/notify
 ```
 
 On Linux, use `notify-send "Claude" "Waiting in ${FEEDME_CWD##*/}"` instead.
-A script that runs longer than 10 seconds is stopped. Files that are not
-executable are ignored, so you can keep notes in the same folder.
+A script that runs longer than 10 seconds is stopped, together with every
+process it started. Files that are not executable are ignored, so you can keep
+notes in the same folder.
 
 ## Alerting on more Claude Code events
 

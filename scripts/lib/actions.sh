@@ -8,7 +8,8 @@
 #
 # Webhook URLs and headers often carry secrets, so files are created 0600 in a
 # 0700 dir, listings mask them, and curl reads them from stdin instead of argv
-# (argv is visible to every local user through ps).
+# (argv is visible to every local user through ps). curl runs with -q so a
+# ~/.curlrc (verbose, proxy, insecure...) cannot leak or alter the request.
 
 FEEDME_DEFAULT_ACTION_TIMEOUT=10
 
@@ -108,26 +109,23 @@ call_webhook() {
     webhook_field "$1" header | while IFS= read -r header; do
       echo "header = $(curl_quote "$header")"
     done
-  } | curl -s -o /dev/null -m 5 -X POST -w '%{http_code}' --data "$body" --config -
+  } | curl -q -s -o /dev/null -m 5 -X POST -w '%{http_code}' --data "$body" --config -
 }
 
-# run_with_timeout <seconds> <cmd...>: kill the command (and its children) when
-# it overruns, so one stuck script cannot keep `fire` alive forever.
+# run_with_timeout <seconds> <cmd...>: run the command in its own process group
+# and kill the whole group when it overruns, so neither a stuck script nor
+# anything it started can keep `fire` alive forever.
 run_with_timeout() {
   local seconds="$1" pid watchdog status
   shift
-  "$@" </dev/null &
+  spawn_session "$@"
   pid=$!
-  (
-    sleep "$seconds"
-    pkill -P "$pid" 2>/dev/null
-    kill "$pid" 2>/dev/null
-  ) &
+  # shellcheck disable=SC2016  # expanded by the watchdog shell, not here
+  spawn_session "${BASH:-bash}" -c 'sleep "$1"; kill -TERM -"$2" 2>/dev/null || kill -TERM "$2"' watchdog "$seconds" "$pid"
   watchdog=$!
   wait "$pid" 2>/dev/null
   status=$?
-  pkill -P "$watchdog" 2>/dev/null
-  kill "$watchdog" 2>/dev/null
+  kill -TERM -"$watchdog" 2>/dev/null
   return "$status"
 }
 
@@ -146,8 +144,13 @@ run_action() {
       fi
       ;;
     *)
-      run_with_timeout "$(action_timeout)" "$1" >/dev/null 2>&1
-      echo "$name: exit $?"
+      run_with_timeout "$(action_timeout)" "$1"
+      status=$?
+      if [ "$status" -eq 143 ]; then
+        echo "$name: stopped after $(action_timeout)s"
+      else
+        echo "$name: exit $status"
+      fi
       ;;
   esac
 }

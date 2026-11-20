@@ -56,16 +56,19 @@ trace() {
   return 0
 }
 
-# detach <cmd...>: start a process that outlives the hook, in its own session
-# so Claude Code cannot take it down with the hook's process group.
-detach() {
-  if command -v setsid >/dev/null 2>&1; then
-    setsid "$@" </dev/null >/dev/null 2>&1 &
-  elif command -v perl >/dev/null 2>&1; then
-    perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die' "$@" </dev/null >/dev/null 2>&1 &
-  else
-    nohup "$@" </dev/null >/dev/null 2>&1 &
-  fi
+# spawn_session <cmd...>: run the command in the background as the leader of a
+# new session, with no inherited stdio. It then outlives the hook's process
+# group, and its whole process group can be signalled through -$!.
+spawn_session() {
+  (
+    if command -v perl >/dev/null 2>&1; then
+      exec perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die' "$@"
+    elif command -v setsid >/dev/null 2>&1; then
+      exec setsid "$@"
+    else
+      exec nohup "$@"
+    fi
+  ) </dev/null >/dev/null 2>&1 &
 }
 
 cmd_arm() {
@@ -81,7 +84,7 @@ cmd_arm() {
     rm -f "$tmp"
     return 0
   fi
-  detach "$FEEDME_ROOT/scripts/feedme.sh" fire "$dir/$session" "$token" "$session" \
+  spawn_session "$FEEDME_ROOT/scripts/feedme.sh" fire "$dir/$session" "$token" "$session" \
     "$(json_field "$input" cwd)"
 }
 

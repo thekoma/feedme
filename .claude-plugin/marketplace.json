@@ -1,5 +1,6 @@
 {
   "name": "feedme",
+  "description": "feedme, a Claude Code plugin that plays a sound (and calls your webhooks) when Claude is waiting for you.",
   "owner": {
     "name": "thekoma",
     "url": "https://github.com/thekoma"

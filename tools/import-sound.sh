@@ -20,6 +20,14 @@ if [ $# -lt 2 ]; then
   exit 2
 fi
 input="$1" output="$2"
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  echo "ffmpeg not found: install it first (macOS: brew install ffmpeg, Debian/Ubuntu: apt install ffmpeg)." >&2
+  exit 1
+fi
+if [ ! -r "$input" ]; then
+  echo "cannot read '$input'." >&2
+  exit 1
+fi
 trim=()
 [ -n "${3:-}" ] && trim+=(-ss "$3")
 [ -n "${4:-}" ] && trim+=(-t "$4")
@@ -27,8 +35,11 @@ trim=()
 # Fade out without knowing the length: reverse, fade in, reverse back.
 shape="aformat=channel_layouts=mono,afade=t=in:d=$FADE_IN,areverse,afade=t=in:d=$FADE_OUT,areverse"
 
-measure="$(ffmpeg -hide_banner -nostats ${trim[@]+"${trim[@]}"} -i "$input" \
-  -af "$shape,loudnorm=I=$TARGET_LUFS:TP=$TARGET_PEAK:print_format=summary" -f null - 2>&1)"
+if ! measure="$(ffmpeg -hide_banner -nostats ${trim[@]+"${trim[@]}"} -i "$input" \
+  -af "$shape,loudnorm=I=$TARGET_LUFS:TP=$TARGET_PEAK:print_format=summary" -f null - 2>&1)"; then
+  printf 'ffmpeg could not read %s:\n%s\n' "$input" "$measure" >&2
+  exit 1
+fi
 field() { printf '%s\n' "$measure" | sed -n "s/^$1:[[:space:]]*\([-0-9.inf+]*\).*/\1/p" | head -n 1; }
 input_i="$(field 'Input Integrated')"
 input_tp="$(field 'Input True Peak')"

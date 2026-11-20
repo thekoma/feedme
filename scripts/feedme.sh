@@ -98,7 +98,7 @@ cmd_set() {
 cmd_play() {
   local name="${1:-$(active_set)}" sound
   if ! player_cmd >/dev/null; then
-    echo "no audio player found (looked for: $FEEDME_PLAYER_CANDIDATES)."
+    echo "$(player_missing_reason)."
     return 0
   fi
   if ! sound="$(pick_sound "$name")"; then
@@ -122,7 +122,7 @@ cmd_status() {
   if player="$(player_cmd)"; then
     echo "player: $player"
   else
-    echo "player: none, no audio player found (looked for: $FEEDME_PLAYER_CANDIDATES)"
+    echo "player: none, $(player_missing_reason)"
   fi
   local actions
   actions="$(action_names)"

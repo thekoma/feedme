@@ -39,15 +39,38 @@ player_exts() {
   esac
 }
 
-# sound_files <dir>: playable files in a set, one per line.
+# player_missing_reason: why player_cmd found nothing, for the user.
+player_missing_reason() {
+  if [ -n "${FEEDME_PLAYER:-}" ]; then
+    echo "FEEDME_PLAYER=$FEEDME_PLAYER not found"
+  else
+    echo "no audio player found (looked for: $FEEDME_PLAYER_CANDIDATES)"
+  fi
+}
+
+# ci_globs "wav mp3": case-insensitive glob words, "[wW][aA][vV] [mM][pP]3".
+ci_globs() {
+  local lower="$1" upper out="" i c u
+  upper="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+  for ((i = 0; i < ${#lower}; i++)); do
+    c="${lower:i:1}"
+    u="${upper:i:1}"
+    if [ "$c" = "$u" ]; then out="$out$c"; else out="${out}[$c$u]"; fi
+  done
+  printf '%s\n' "$out"
+}
+
+# sound_files <dir>: playable files in a set, one per line. One glob per
+# extension rather than a test per file, so big sets stay fast.
 sound_files() {
-  local exts file ext
-  exts=" $(player_exts "$(player_cmd)") "
-  for file in "$1"/*; do
-    [ -f "$file" ] || continue
-    case "$file" in *.*) ;; *) continue ;; esac
-    ext="$(printf '%s' "${file##*.}" | tr '[:upper:]' '[:lower:]')"
-    case "$exts" in *" $ext "*) printf '%s\n' "$file" ;; esac
+  local globs glob file
+  read -r -a globs <<< "$(ci_globs "$(player_exts "$(player_cmd)")")"
+  for glob in "${globs[@]}"; do
+    # $glob is unquoted on purpose: it is a pattern.
+    # shellcheck disable=SC2231
+    for file in "$1"/*.$glob; do
+      [ -f "$file" ] && printf '%s\n' "$file"
+    done
   done
 }
 

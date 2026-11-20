@@ -75,6 +75,10 @@ NO_PLAYERS=(afplay paplay pw-play aplay ffplay mpv)
 
 fail() { echo "    $*"; exit 1; }
 
+# skip <reason>: the test cannot run here (missing tool); reported, not failed.
+SKIP=77
+skip() { echo "    skipped: $*"; exit "$SKIP"; }
+
 assert_eq() { [ "$1" = "$2" ] || fail "expected [$2], got [$1]"; }
 
 assert_contains() {
@@ -252,6 +256,31 @@ test_player_extension_filter() {
   assert_contains "$(cat "$T/played")" "y.wav"
 }
 
+test_missing_default_falls_back_to_first_set() {
+  rm -rf "$FEEDME_SOUNDS_DIR/feedme"
+  make_set bundled zeta z.wav
+  make_set bundled alpha a.wav
+  fm set gone >/dev/null 2>&1
+  assert_contains "$(fm status)" "set: alpha"
+  fm play >/dev/null
+  assert_contains "$(cat "$T/played")" "/alpha/a.wav"
+}
+
+test_no_sets_at_all() {
+  rm -rf "$FEEDME_SOUNDS_DIR/feedme"
+  assert_contains "$(fm status)" "set: none"
+  assert_contains "$(fm list)" "no sound sets found"
+  arm s1
+  sleep 2.5
+  assert_eq "$(played_count)" 0
+}
+
+test_invalid_feedme_player_reported() {
+  export FEEDME_PLAYER="$T/bin/no-such-player"
+  assert_contains "$(fm status)" "FEEDME_PLAYER=$T/bin/no-such-player not found"
+  assert_contains "$(fm play)" "FEEDME_PLAYER=$T/bin/no-such-player not found"
+}
+
 test_missing_set_falls_back() {
   make_set user gone s.wav
   fm set gone >/dev/null
@@ -339,6 +368,18 @@ test_no_jq_fallback() {
   printf '{"session_id":"first"}' | PATH="$sys" fm cancel
   [ -e "$FEEDME_STATE_DIR/first" ] && fail "cancel without jq did not find the session"
   return 0
+}
+
+test_no_jq_malformed_input_pairs_via_default() {
+  local sys input
+  sys="$(path_without jq)"
+  for input in '{}' '{"x":'; do
+    printf '%s' "$input" | PATH="$sys" FEEDME_DELAY=1 fm arm
+    [ -e "$FEEDME_STATE_DIR/default" ] || fail "no-jq input [$input] did not arm 'default'"
+    printf '%s' "$input" | PATH="$sys" fm cancel
+    [ -e "$FEEDME_STATE_DIR/default" ] && fail "no-jq input [$input] did not cancel 'default'"
+  done
+  no_play_after 2.5
 }
 
 test_hook_commands_silent_and_exit_zero() {
@@ -488,7 +529,7 @@ test_fire_calls_webhook() {
 }
 
 test_webhook_json_escaping() {
-  command -v jq >/dev/null || return 0
+  command -v jq >/dev/null || skip "needs jq"
   fake_curl
   fm hook add ha https://h.example/x >/dev/null
   printf '{"session_id":"s1","cwd":"/a\\"b\\\\c\\nd\\te"}' | PATH="$T/bin:$PATH" FEEDME_DELAY=1 fm arm
@@ -523,14 +564,36 @@ test_failing_script_does_not_block_sound() {
   wait_for 4 has_played || fail "sound did not play"
 }
 
+script_running() { pgrep -f -- "$(HOOKS_D)/$1" >/dev/null; }
+
 test_hanging_script_is_killed() {
-  add_script slow 'sleep 6; touch "'"$T"'/late"'
+  add_script slow 'sleep 3; touch "'"$T"'/late"'
   hook_json s1 | FEEDME_DELAY=1 FEEDME_ACTION_TIMEOUT=1 fm arm
   wait_for 3 has_played || fail "a hanging script delayed the sound"
   wait_for 4 fire_gone || fail "fire still waiting on the hanging script"
-  sleep 3.5
+  script_running slow && fail "the hanging script is still running after the timeout"
+  sleep 3
   [ -e "$T/late" ] && fail "the hanging script was not killed"
   return 0
+}
+
+test_hanging_grandchildren_are_killed() {
+  # The trailing `true` stops bash from exec-ing sh, so sh is a grandchild.
+  add_script nested '( sh -c "sleep 3; touch '"$T"'/late"; true ) & wait'
+  local started
+  started="$(date +%s)"
+  FEEDME_ACTION_TIMEOUT=1 fm hook test nested >/dev/null
+  [ $(( $(date +%s) - started )) -le 2 ] || fail "hook test waited for the hanging script"
+  sleep 3.5
+  [ -e "$T/late" ] && fail "a grandchild of the script survived the timeout"
+  return 0
+}
+
+test_webhook_ignores_curlrc() {
+  fake_curl
+  fm hook add ha https://h.example/x >/dev/null
+  PATH="$T/bin:$PATH" fm hook test ha >/dev/null
+  case "$(head -n 1 "$T/curl.argv")" in -q\ *) ;; *) fail "curl must get -q first: $(head -n 1 "$T/curl.argv")" ;; esac
 }
 
 test_hook_test_runs_one_or_all() {
@@ -570,10 +633,16 @@ main() {
   else
     tests="$(declare -F | awk '{print $3}' | grep '^test_')"
   fi
+  local skipped=0 status
   for t in $tests; do
-    if ( t_setup; trap t_teardown EXIT; "$t" ); then
+    ( t_setup; trap t_teardown EXIT; "$t" )
+    status=$?
+    if [ "$status" -eq 0 ]; then
       pass=$((pass + 1))
       echo "ok   $t"
+    elif [ "$status" -eq "$SKIP" ]; then
+      skipped=$((skipped + 1))
+      echo "skip $t"
     else
       failed="$failed $t"
       echo "FAIL $t"
@@ -581,10 +650,10 @@ main() {
   done
   echo
   if [ -n "$failed" ]; then
-    echo "$pass passed, failed:$failed"
+    echo "$pass passed, $skipped skipped, failed:$failed"
     exit 1
   fi
-  echo "$pass passed"
+  echo "$pass passed, $skipped skipped"
 }
 
 main "$@"
