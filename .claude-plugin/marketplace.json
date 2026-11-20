@@ -1,0 +1,14 @@
+{
+  "name": "feedme",
+  "owner": {
+    "name": "thekoma",
+    "url": "https://github.com/thekoma"
+  },
+  "plugins": [
+    {
+      "name": "feedme",
+      "source": "./",
+      "description": "Plays a sound (and optionally calls your webhooks) when Claude has been waiting for you for a while."
+    }
+  ]
+}

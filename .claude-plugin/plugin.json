@@ -1,0 +1,13 @@
+{
+  "name": "feedme",
+  "version": "1.0.0",
+  "description": "Plays a sound (and optionally calls your webhooks) when Claude has been waiting for you for a while.",
+  "author": {
+    "name": "thekoma",
+    "url": "https://github.com/thekoma"
+  },
+  "homepage": "https://github.com/thekoma/feedme",
+  "repository": "https://github.com/thekoma/feedme",
+  "license": "MIT",
+  "keywords": ["notification", "sound", "hooks", "webhook", "alert"]
+}
