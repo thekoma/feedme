@@ -2,7 +2,3 @@
 source/
 egm_lite_*.md
 .DS_Store
-
-# Legacy pre-plugin files, removed once the plugin is installed
-/feedme.sh
-/feed_me_0*.wav
