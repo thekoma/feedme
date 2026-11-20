@@ -90,7 +90,7 @@ $1" ;; esac
 # assert_fail <cmd...>  the command must exit non-zero.
 assert_fail() { "$@" >/dev/null 2>&1 && fail "expected failure: $*"; return 0; }
 
-# wait_for <seconds> <test-expression...>  polls until the expression holds.
+# wait_for <whole seconds> <test-expression...>  polls until the expression holds.
 wait_for() {
   local deadline=$(( $(date +%s) + $1 ))
   shift
@@ -259,6 +259,140 @@ test_missing_set_falls_back() {
   assert_contains "$(fm status)" "set: feedme"
   fm play >/dev/null
   assert_contains "$(cat "$T/played")" "/feedme/clip.wav"
+}
+
+# ---------------------------------------------------------------------------
+# Alert lifecycle: arm / cancel / fire (the plugin hooks)
+# ---------------------------------------------------------------------------
+
+arm() { hook_json "$1" | FEEDME_DELAY="${2:-1}" fm arm; }
+cancel() { hook_json "$1" | fm cancel; }
+fire_gone() { ! fire_running; }
+no_play_after() { sleep "$1"; assert_eq "$(played_count)" 0; }
+
+test_arm_fires() {
+  arm s1
+  wait_for 4 has_played || fail "no sound within 4s"
+  assert_contains "$(cat "$T/played")" "/feedme/clip.wav"
+}
+
+test_cancel_prevents() {
+  arm s1
+  cancel s1
+  no_play_after 2.5
+}
+
+test_cancel_stops_fire_process() {
+  arm s1 30
+  wait_for 2 fire_running || fail "fire did not start"
+  cancel s1
+  wait_for 3 fire_gone || fail "fire still running 2s after cancel"
+}
+
+test_rearm_plays_once() {
+  arm s1
+  sleep 0.4
+  arm s1
+  wait_for 4 has_played || fail "no sound"
+  sleep 1.5
+  assert_eq "$(played_count)" 1
+}
+
+test_disabled_does_not_arm() {
+  fm off >/dev/null
+  arm s1
+  [ -e "$FEEDME_STATE_DIR/s1" ] && fail "armed while disabled"
+  no_play_after 2.5
+}
+
+test_off_while_waiting() {
+  arm s1 2
+  fm off >/dev/null
+  no_play_after 3.5
+}
+
+test_sessions_isolated() {
+  arm A
+  arm B
+  cancel A
+  wait_for 4 has_played || fail "session B did not play"
+  sleep 1
+  assert_eq "$(played_count)" 1
+}
+
+test_missing_session_id_pairs_via_default() {
+  local input
+  for input in '{}' '' '{"x":' '{"session_id":""}' '{"session_id":"../.."}'; do
+    printf '%s' "$input" | FEEDME_DELAY=1 fm arm
+    [ -e "$FEEDME_STATE_DIR/default" ] || fail "input [$input] did not arm 'default'"
+    printf '%s' "$input" | fm cancel
+  done
+  no_play_after 2.5
+}
+
+test_no_jq_fallback() {
+  local sys
+  sys="$(path_without jq)"
+  printf '{"session_id":"first","tool_input":{"session_id":"second"}}' | PATH="$sys" FEEDME_DELAY=30 fm arm
+  [ -e "$FEEDME_STATE_DIR/first" ] || fail "sed fallback did not use the first session_id"
+  [ -e "$FEEDME_STATE_DIR/second" ] && fail "sed fallback used the last session_id"
+  printf '{"session_id":"first"}' | PATH="$sys" fm cancel
+  [ -e "$FEEDME_STATE_DIR/first" ] && fail "cancel without jq did not find the session"
+  return 0
+}
+
+test_hook_commands_silent_and_exit_zero() {
+  local sys out
+  sys="$(path_without jq)"
+  : > "$T/not-a-dir"
+  out="$( {
+    printf '{"x":' | fm arm; echo "rc=$?"
+    printf '{"x":' | fm cancel; echo "rc=$?"
+    printf '{"session_id":"z"}' | PATH="$sys" fm arm; echo "rc=$?"
+    printf '{"session_id":"z"}' | FEEDME_STATE_DIR="$T/not-a-dir/state" fm arm; echo "rc=$?"
+    printf '{"session_id":"z"}' | FEEDME_STATE_DIR="$T/not-a-dir/state" fm cancel; echo "rc=$?"
+    printf '{"session_id":"z"}' | FEEDME_CONFIG_DIR="$T/not-a-dir/config" fm arm; echo "rc=$?"
+  } 2>&1 )"
+  assert_eq "$out" "rc=0
+rc=0
+rc=0
+rc=0
+rc=0
+rc=0"
+}
+
+test_symlinked_state_dir_refused() {
+  mkdir -p "$T/elsewhere"
+  ln -s "$T/elsewhere" "$FEEDME_STATE_DIR"
+  arm s1
+  [ -n "$(ls -A "$T/elsewhere")" ] && fail "wrote through a symlinked state dir"
+  no_play_after 2.5
+}
+
+test_state_dir_is_private() {
+  unset FEEDME_STATE_DIR
+  export TMPDIR="$T/tmp"
+  mkdir -p "$TMPDIR"
+  arm s1 30
+  local dir
+  dir="$TMPDIR/claude-feedme-$(id -u)"
+  [ -d "$dir" ] || fail "state dir not created in TMPDIR"
+  # shellcheck disable=SC2012  # stat flags differ between macOS and Linux
+  assert_eq "$(ls -ld "$dir" | cut -c1-10)" "drwx------"
+}
+
+test_trace_records_hooks() {
+  arm s1
+  cancel s1
+  arm s2
+  wait_for 4 has_played || fail "no sound"
+  sleep 0.3
+  local trace
+  trace="$(cat "$T/trace")"
+  assert_contains "$trace" "arm s1"
+  assert_contains "$trace" "cancel s1"
+  assert_contains "$trace" "fire s2"
+  assert_not_contains "$trace" "fire s1"
 }
 
 # ---------------------------------------------------------------------------

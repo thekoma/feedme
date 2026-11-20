@@ -15,6 +15,8 @@ FEEDME_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$FEEDME_ROOT/scripts/lib/config.sh"
 # shellcheck source=lib/sounds.sh
 . "$FEEDME_ROOT/scripts/lib/sounds.sh"
+# shellcheck source=lib/alert.sh
+. "$FEEDME_ROOT/scripts/lib/alert.sh"
 
 usage() {
   cat >&2 <<'EOF'
@@ -120,6 +122,10 @@ cmd_status() {
 command="${1:-}"
 [ $# -gt 0 ] && shift
 case "$command" in
+  # Hook paths: never print, never fail (see lib/alert.sh).
+  arm) cmd_arm >/dev/null 2>&1; exit 0 ;;
+  cancel) cmd_cancel >/dev/null 2>&1; exit 0 ;;
+  fire) cmd_fire "$@" >/dev/null 2>&1; exit 0 ;;
   on) cmd_on ;;
   off) cmd_off ;;
   status) cmd_status ;;
