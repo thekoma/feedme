@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck source-path=SCRIPTDIR
 # feedme: plays a sound when Claude has been waiting for you for a while.
 #
 # Hook entry points (hooks/hooks.json):
@@ -6,13 +7,14 @@
 #   feedme.sh cancel   UserPromptSubmit / PreToolUse / SessionEnd: drop it
 #
 # User commands (the /feedme:* skills call these):
-#   on | off | status | timeout [seconds]
+#   on | off | status | timeout [seconds] | list | set <name> | play [name]
 
 FEEDME_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib/config.sh
 . "$FEEDME_ROOT/scripts/lib/config.sh"
+# shellcheck source=lib/sounds.sh
+. "$FEEDME_ROOT/scripts/lib/sounds.sh"
 
 usage() {
   cat >&2 <<'EOF'
@@ -20,6 +22,9 @@ usage: feedme.sh <command>
   on | off                 enable or disable the alert
   status                   show the current settings
   timeout [seconds]        show or set the delay before the alert (1-86400)
+  list                     list the sound sets
+  set <name>               choose the sound set
+  play [name]              play a sound from the active (or named) set now
 EOF
   exit 2
 }
@@ -50,10 +55,65 @@ cmd_timeout() {
   fi
 }
 
+cmd_list() {
+  local active name dir source names
+  names="$(set_names)"
+  if [ -z "$names" ]; then
+    echo "no sound sets found. Add one as a folder of audio files in $(user_sounds_dir)/"
+    return
+  fi
+  active="$(active_set)"
+  # Set names are validated single words, so plain word splitting is safe.
+  for name in $names; do
+    dir="$(set_path "$name")"
+    source=bundled
+    case "$dir" in "$(user_sounds_dir)"/*) source=user ;; esac
+    if [ "$name" = "$active" ]; then printf '* '; else printf '  '; fi
+    echo "$name ($(plural_sounds "$(count_sounds "$dir")"), $source)"
+  done
+  echo
+  echo "Your own sets go in $(user_sounds_dir)/<name>/"
+}
+
+cmd_set() {
+  local name="${1:-}"
+  if ! set_path "$name" >/dev/null; then
+    echo "unknown sound set '$name'. Available: $(set_names | tr '\n' ' ')" >&2
+    exit 1
+  fi
+  cfg_set set "$name" || exit 1
+  echo "sound set: $name ($(plural_sounds "$(count_sounds "$(set_path "$name")")"))"
+}
+
+cmd_play() {
+  local name="${1:-$(active_set)}" sound
+  if ! player_cmd >/dev/null; then
+    echo "no audio player found (looked for: $FEEDME_PLAYER_CANDIDATES)."
+    return 0
+  fi
+  if ! sound="$(pick_sound "$name")"; then
+    echo "unknown or empty sound set '$name'." >&2
+    exit 1
+  fi
+  play_file "$sound"
+  echo "played ${sound##*/} from $name"
+}
+
 cmd_status() {
+  local set player
   if cfg_enabled; then echo "feedme: enabled"; else echo "feedme: disabled"; fi
   echo "timeout: $(cfg_timeout)s"
-  echo "set: $(cfg_get set "$FEEDME_DEFAULT_SET")"
+  set="$(active_set)"
+  if [ -n "$set" ]; then
+    echo "set: $set ($(plural_sounds "$(count_sounds "$(set_path "$set")")"))"
+  else
+    echo "set: none (no sound sets found)"
+  fi
+  if player="$(player_cmd)"; then
+    echo "player: $player"
+  else
+    echo "player: none, no audio player found (looked for: $FEEDME_PLAYER_CANDIDATES)"
+  fi
   echo "config: $(cfg_dir)"
 }
 
@@ -64,5 +124,8 @@ case "$command" in
   off) cmd_off ;;
   status) cmd_status ;;
   timeout) cmd_timeout "$@" ;;
+  list) cmd_list ;;
+  set) cmd_set "$@" ;;
+  play) cmd_play "$@" ;;
   *) usage ;;
 esac

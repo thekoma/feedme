@@ -1,4 +1,6 @@
 #!/bin/bash
+# Fake tools are written as single-quoted bash bodies on purpose.
+# shellcheck disable=SC2016
 # feedme test suite. Plain bash, no dependencies beyond the plugin's own.
 #
 #   /bin/bash tests/run.sh            run every test
@@ -24,7 +26,8 @@ t_setup() {
   unset FEEDME_DELAY XDG_RUNTIME_DIR
   mkdir -p "$T/bin"
   make_set bundled feedme clip.wav
-  make_tool fakeplay 'printf "%s\n" "$*" >> "'"$T"'/played"'
+  # The fake player logs "<argc>:<first arg>" so tests can check quoting.
+  make_tool fakeplay 'printf "%s:%s\n" "$#" "$1" >> "'"$T"'/played"'
   export FEEDME_PLAYER="$T/bin/fakeplay"
 }
 
@@ -54,6 +57,21 @@ make_tool() {
 }
 
 fm() { "$FEEDME" "$@"; }
+
+# path_without <cmd>...  prints a PATH holding every system tool except those named,
+# so a test can simulate a machine without jq, afplay and so on.
+path_without() {
+  local dir="$T/sys" f name
+  mkdir -p "$dir"
+  for f in /usr/bin/* /bin/*; do
+    name="${f##*/}"
+    case " $* " in *" $name "*) continue ;; esac
+    [ -e "$dir/$name" ] || ln -s "$f" "$dir/$name"
+  done
+  printf '%s\n' "$dir"
+}
+
+NO_PLAYERS=(afplay paplay pw-play aplay ffplay mpv)
 
 fail() { echo "    $*"; exit 1; }
 
@@ -130,7 +148,6 @@ test_env_delay_override() {
 
 test_corrupt_config() {
   mkdir -p "$FEEDME_CONFIG_DIR"
-  # shellcheck disable=SC2016  # the $(...) must reach the file unexpanded
   printf 'garbage line\ntimeout=abc\n=x\nenabled=maybe\n$(touch %s/pwned)\n' "$T" > "$FEEDME_CONFIG_DIR/config"
   local out
   out="$(fm status)"
@@ -143,6 +160,105 @@ test_corrupt_config() {
 test_unknown_command() {
   fm frobnicate >/dev/null 2>&1
   assert_eq "$?" 2
+}
+
+# ---------------------------------------------------------------------------
+# Sound sets: list / set / play
+# ---------------------------------------------------------------------------
+
+test_list_bundled_and_user() {
+  make_set bundled a x.wav y.wav
+  make_set bundled b z.wav
+  make_set user c w.wav
+  fm set a >/dev/null || fail "set a failed"
+  local out
+  out="$(fm list)"
+  assert_contains "$out" "* a (2 sounds, bundled)"
+  assert_contains "$out" "  b (1 sound, bundled)"
+  assert_contains "$out" "  c (1 sound, user)"
+  assert_contains "$out" "  feedme (1 sound, bundled)"
+}
+
+test_user_overrides_bundled() {
+  make_set bundled a x.wav
+  make_set user a y.wav z.wav
+  local out
+  out="$(fm list)"
+  assert_contains "$out" "a (2 sounds, user)"
+  assert_not_contains "$out" "a (1 sound, bundled)"
+  fm play a >/dev/null
+  assert_contains "$(cat "$T/played")" "$FEEDME_CONFIG_DIR/sounds/a/"
+}
+
+test_list_ignores_empty_and_non_audio() {
+  mkdir -p "$FEEDME_SOUNDS_DIR/empty"
+  make_set bundled docs README.md notes.txt
+  make_set bundled a x.wav CREDITS.md
+  local out
+  out="$(fm list)"
+  assert_not_contains "$out" "empty"
+  assert_not_contains "$out" "docs"
+  assert_contains "$out" "a (1 sound, bundled)"
+}
+
+test_set_valid() {
+  make_set user mine s.WAV
+  fm set mine >/dev/null || fail "set mine failed"
+  assert_contains "$(fm status)" "set: mine (1 sound)"
+}
+
+test_set_unknown() {
+  assert_fail fm set nope
+  assert_contains "$(fm status)" "set: feedme"
+}
+
+test_set_traversal() {
+  mkdir -p "$T/x" "$FEEDME_SOUNDS_DIR/a/b"
+  : > "$T/x/s.wav"
+  : > "$FEEDME_SOUNDS_DIR/a/b/s.wav"
+  make_set bundled .hidden s.wav
+  local name
+  for name in ../x .hidden a/b '' '..' '-'; do
+    assert_fail fm set "$name"
+  done
+  assert_contains "$(fm status)" "set: feedme"
+  assert_not_contains "$(fm list)" "hidden"
+}
+
+test_play_spaces() {
+  make_set bundled a "my sound.wav"
+  fm play a >/dev/null
+  assert_eq "$(cat "$T/played")" "1:$FEEDME_SOUNDS_DIR/a/my sound.wav"
+}
+
+test_no_player() {
+  unset FEEDME_PLAYER
+  local sys
+  sys="$(path_without "${NO_PLAYERS[@]}")"
+  PATH="$sys" fm play >/dev/null 2>&1 || fail "play must not fail without a player"
+  assert_contains "$(PATH="$sys" fm status)" "no audio player"
+}
+
+test_player_extension_filter() {
+  unset FEEDME_PLAYER
+  local sys
+  sys="$(path_without "${NO_PLAYERS[@]}")"
+  make_tool aplay 'printf "%s\n" "$1" >> "'"$T"'/played"'
+  make_set bundled a x.mp3 y.wav
+  assert_contains "$(PATH="$T/bin:$sys" fm list)" "a (1 sound, bundled)"
+  fm set a >/dev/null
+  for _ in 1 2 3 4 5 6; do PATH="$T/bin:$sys" fm play >/dev/null; done
+  assert_not_contains "$(cat "$T/played")" "x.mp3"
+  assert_contains "$(cat "$T/played")" "y.wav"
+}
+
+test_missing_set_falls_back() {
+  make_set user gone s.wav
+  fm set gone >/dev/null
+  rm -rf "$FEEDME_CONFIG_DIR/sounds/gone"
+  assert_contains "$(fm status)" "set: feedme"
+  fm play >/dev/null
+  assert_contains "$(cat "$T/played")" "/feedme/clip.wav"
 }
 
 # ---------------------------------------------------------------------------
