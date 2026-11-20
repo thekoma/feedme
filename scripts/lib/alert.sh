@@ -113,9 +113,7 @@ cmd_fire() {
   trace fire "$session"
   set="$(active_set)"
   [ -n "$set" ] && sound="$(pick_sound "$set")"
-  if declare -F run_actions >/dev/null; then
-    run_actions "" "$set" "$sound" "$session" "$cwd" &
-  fi
+  run_actions "$set" "$sound" "$session" "$cwd" &
   [ -n "$sound" ] && play_file "$sound"
   wait
 }

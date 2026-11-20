@@ -12,11 +12,6 @@ FEEDME_ALL_EXTS="wav aif aiff mp3 m4a caf flac ogg"
 bundled_sounds_dir() { printf '%s\n' "${FEEDME_SOUNDS_DIR:-$FEEDME_ROOT/sounds}"; }
 user_sounds_dir() { printf '%s/sounds\n' "$(cfg_dir)"; }
 
-# A set name is a single path component: no slashes, no leading dot.
-valid_set_name() {
-  case "$1" in '' | .* | *[!A-Za-z0-9._-]*) return 1 ;; esac
-}
-
 # player_cmd: FEEDME_PLAYER (a single executable), else the first known player.
 player_cmd() {
   if [ -n "${FEEDME_PLAYER:-}" ]; then
@@ -60,7 +55,7 @@ count_sounds() { sound_files "$1" | grep -c .; }
 
 # set_path <name>: the directory of a usable set (user first), or exit 1.
 set_path() {
-  valid_set_name "$1" || return 1
+  valid_name "$1" || return 1
   local base
   for base in "$(user_sounds_dir)" "$(bundled_sounds_dir)"; do
     if [ -d "$base/$1" ] && [ "$(count_sounds "$base/$1")" -gt 0 ]; then

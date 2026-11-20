@@ -396,6 +396,170 @@ test_trace_records_hooks() {
 }
 
 # ---------------------------------------------------------------------------
+# Actions: webhooks and scripts in hooks.d
+# ---------------------------------------------------------------------------
+
+HOOKS_D() { printf '%s\n' "$FEEDME_CONFIG_DIR/hooks.d"; }
+
+# Fake curl: argv to curl.argv, stdin (the curl config) to curl.stdin,
+# the --data argument to payload; answers like `-w '%{http_code}'`.
+fake_curl() {
+  make_tool curl '
+printf "%s\n" "$*" >> "'"$T"'/curl.argv"
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--data" ]; then printf "%s" "$2" > "'"$T"'/payload"; fi
+  shift
+done
+cat >> "'"$T"'/curl.stdin"
+printf 200'
+}
+
+add_script() {
+  mkdir -p "$(HOOKS_D)"
+  printf '#!/bin/bash\n%s\n' "$2" > "$(HOOKS_D)/$1"
+  chmod +x "$(HOOKS_D)/$1"
+}
+
+has_file() { [ -e "$1" ]; }
+
+test_hook_add_writes_private_file() {
+  fm hook add ha 'https://h.example/api/webhook/secret123' 'Authorization: Bearer tok' >/dev/null || fail "add failed"
+  local file
+  file="$(HOOKS_D)/ha.webhook"
+  [ -f "$file" ] || fail "no webhook file"
+  # shellcheck disable=SC2012  # stat flags differ between macOS and Linux
+  assert_eq "$(ls -l "$file" | cut -c1-10)" "-rw-------"
+  # shellcheck disable=SC2012
+  assert_eq "$(ls -ld "$(HOOKS_D)" | cut -c1-10)" "drwx------"
+  assert_contains "$(cat "$file")" "url=https://h.example/api/webhook/secret123"
+  assert_contains "$(cat "$file")" "header=Authorization: Bearer tok"
+}
+
+test_hook_add_validates() {
+  assert_fail fm hook add ../x https://a.example
+  assert_fail fm hook add .x https://a.example
+  assert_fail fm hook add ok ftp://a.example
+  assert_fail fm hook add ok 'https://a.example/x y'
+  assert_fail fm hook add ok https://a.example 'NoColon'
+  assert_fail fm hook add ok https://a.example 'Bad Name: x'
+  assert_fail fm hook add ok https://a.example 'X-Empty:   '
+  assert_fail fm hook add ok https://a.example "X-Inject: a
+url=https://evil.example"
+  assert_fail fm hook add ok
+  [ -n "$(ls -A "$(HOOKS_D)" 2>/dev/null)" ] && fail "a rejected webhook was written"
+  return 0
+}
+
+test_hook_add_and_list_mask_secrets() {
+  local out
+  out="$(fm hook add ha 'https://user:pw@h.example:8123/api/webhook/secret123?k=v' 'Authorization: Bearer tok')"
+  assert_contains "$out" "https://h.example:8123/***"
+  assert_contains "$out" "characters"
+  out="$out
+$(fm hook list)"
+  assert_contains "$out" "ha"
+  assert_contains "$out" "https://h.example:8123/***"
+  assert_contains "$out" "Authorization: ***"
+  assert_not_contains "$out" "secret123"
+  assert_not_contains "$out" "tok"
+  assert_not_contains "$out" "pw@"
+}
+
+test_hook_rm() {
+  fm hook add ha https://h.example/x >/dev/null
+  fm hook rm ha >/dev/null || fail "rm failed"
+  [ -e "$(HOOKS_D)/ha.webhook" ] && fail "file still there"
+  assert_fail fm hook rm ha
+}
+
+test_fire_calls_webhook() {
+  fake_curl
+  fm hook add ha 'https://h.example/hook?a=1&b=2' 'X-Token: abc' >/dev/null
+  PATH="$T/bin:$PATH" arm s1
+  wait_for 4 has_file "$T/payload" || fail "webhook not called"
+  sleep 0.2
+  assert_contains "$(cat "$T/curl.stdin")" 'url = "https://h.example/hook?a=1&b=2"'
+  assert_contains "$(cat "$T/curl.stdin")" 'header = "X-Token: abc"'
+  assert_contains "$(cat "$T/curl.stdin")" 'header = "Content-Type: application/json"'
+  assert_not_contains "$(cat "$T/curl.argv")" "abc"
+  assert_contains "$(cat "$T/payload")" '"set":"feedme"'
+  assert_contains "$(cat "$T/payload")" '"session_id":"s1"'
+  wait_for 2 has_played || fail "sound did not play"
+}
+
+test_webhook_json_escaping() {
+  command -v jq >/dev/null || return 0
+  fake_curl
+  fm hook add ha https://h.example/x >/dev/null
+  printf '{"session_id":"s1","cwd":"/a\\"b\\\\c\\nd\\te"}' | PATH="$T/bin:$PATH" FEEDME_DELAY=1 fm arm
+  wait_for 4 has_file "$T/payload" || fail "webhook not called"
+  sleep 0.2
+  jq -e . "$T/payload" >/dev/null || fail "invalid JSON: $(cat "$T/payload")"
+  assert_eq "$(jq -r .cwd "$T/payload")" "$(printf '/a"b\\c\nd\te')"
+  assert_eq "$(jq -r .event "$T/payload")" "feedme"
+}
+
+test_fire_runs_script() {
+  add_script notify 'printf "%s|%s|%s|%s" "$FEEDME_SET" "$FEEDME_SESSION_ID" "$FEEDME_CWD" "${FEEDME_SOUND##*/}" > "'"$T"'/script.out"'
+  arm s1
+  wait_for 4 has_file "$T/script.out" || fail "script did not run"
+  sleep 0.2
+  assert_eq "$(cat "$T/script.out")" "feedme|s1|/work|clip.wav"
+}
+
+test_non_executable_files_ignored() {
+  mkdir -p "$(HOOKS_D)"
+  printf '#!/bin/bash\ntouch "%s/ran"\n' "$T" > "$(HOOKS_D)/README"
+  arm s1
+  wait_for 4 has_played || fail "no sound"
+  sleep 0.5
+  [ -e "$T/ran" ] && fail "a non-executable file was run"
+  assert_not_contains "$(fm hook list)" "README"
+}
+
+test_failing_script_does_not_block_sound() {
+  add_script broken 'exit 1'
+  arm s1
+  wait_for 4 has_played || fail "sound did not play"
+}
+
+test_hanging_script_is_killed() {
+  add_script slow 'sleep 6; touch "'"$T"'/late"'
+  hook_json s1 | FEEDME_DELAY=1 FEEDME_ACTION_TIMEOUT=1 fm arm
+  wait_for 3 has_played || fail "a hanging script delayed the sound"
+  wait_for 4 fire_gone || fail "fire still waiting on the hanging script"
+  sleep 3.5
+  [ -e "$T/late" ] && fail "the hanging script was not killed"
+  return 0
+}
+
+test_hook_test_runs_one_or_all() {
+  add_script a 'touch "'"$T"'/a.ran"'
+  add_script b 'touch "'"$T"'/b.ran"'
+  local out
+  out="$(fm hook test a)"
+  assert_contains "$out" "a"
+  [ -e "$T/a.ran" ] || fail "a did not run"
+  [ -e "$T/b.ran" ] && fail "b ran but only a was asked"
+  fm hook test >/dev/null
+  [ -e "$T/b.ran" ] || fail "b did not run"
+  assert_fail fm hook test nope
+  assert_eq "$(played_count)" 0
+}
+
+test_hook_test_webhook_reports_status() {
+  fake_curl
+  fm hook add ha https://h.example/x >/dev/null
+  assert_contains "$(PATH="$T/bin:$PATH" fm hook test ha)" "HTTP 200"
+}
+
+test_status_counts_actions() {
+  add_script a 'true'
+  fm hook add ha https://h.example/x >/dev/null
+  assert_contains "$(fm status)" "actions: 2 (a, ha)"
+}
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 

@@ -8,6 +8,7 @@
 #
 # User commands (the /feedme:* skills call these):
 #   on | off | status | timeout [seconds] | list | set <name> | play [name]
+#   hook add <name> <url> [header...] | hook rm <name> | hook list | hook test [name]
 
 FEEDME_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -17,6 +18,8 @@ FEEDME_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$FEEDME_ROOT/scripts/lib/sounds.sh"
 # shellcheck source=lib/alert.sh
 . "$FEEDME_ROOT/scripts/lib/alert.sh"
+# shellcheck source=lib/actions.sh
+. "$FEEDME_ROOT/scripts/lib/actions.sh"
 
 usage() {
   cat >&2 <<'EOF'
@@ -27,6 +30,11 @@ usage: feedme.sh <command>
   list                     list the sound sets
   set <name>               choose the sound set
   play [name]              play a sound from the active (or named) set now
+  hook add <name> <url> ['Header: value'...]
+                           call a webhook when the alert fires
+  hook rm <name>           remove a webhook
+  hook list                list webhooks and scripts (secrets masked)
+  hook test [name]         run the actions now
 EOF
   exit 2
 }
@@ -116,7 +124,26 @@ cmd_status() {
   else
     echo "player: none, no audio player found (looked for: $FEEDME_PLAYER_CANDIDATES)"
   fi
+  local actions
+  actions="$(action_names)"
+  if [ -n "$actions" ]; then
+    echo "actions: $(echo "$actions" | tr ',' '\n' | grep -c .) ($actions)"
+  else
+    echo "actions: none"
+  fi
   echo "config: $(cfg_dir)"
+}
+
+cmd_hook() {
+  local sub="${1:-list}"
+  [ $# -gt 0 ] && shift
+  case "$sub" in
+    add) hook_add "$@" ;;
+    rm | remove) hook_rm "$@" ;;
+    list) hook_list ;;
+    test) hook_test "$@" ;;
+    *) usage ;;
+  esac
 }
 
 command="${1:-}"
@@ -133,5 +160,6 @@ case "$command" in
   list) cmd_list ;;
   set) cmd_set "$@" ;;
   play) cmd_play "$@" ;;
+  hook) cmd_hook "$@" || exit 1 ;;
   *) usage ;;
 esac

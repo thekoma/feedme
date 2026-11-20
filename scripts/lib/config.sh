@@ -37,6 +37,12 @@ cfg_set() {
   } > "$tmp" && mv -f "$tmp" "$file"
 }
 
+# valid_name: a set or action name is one path component: letters, digits,
+# '.', '_' and '-', no leading dot.
+valid_name() {
+  case "$1" in '' | .* | *[!A-Za-z0-9._-]*) return 1 ;; esac
+}
+
 cfg_enabled() {
   [ "$(cfg_get enabled 1)" != 0 ]
 }
